@@ -55,6 +55,13 @@ export function loadConfig(): AutomatonConfig | null {
       ...(raw.modelStrategy ?? {}),
     };
 
+    // If Gemini key is present, prefer Gemini models as defaults
+    if (raw.geminiApiKey && !raw.modelStrategy) {
+      modelStrategy.inferenceModel = "gemini-3-flash-preview";
+      modelStrategy.lowComputeModel = "gemini-1.5-flash";
+      modelStrategy.criticalModel = "gemini-1.5-flash";
+    }
+
     // Deep-merge soul config with defaults
     const soulConfig: SoulConfig = {
       ...DEFAULT_SOUL_CONFIG,
@@ -140,7 +147,7 @@ export function createConfig(params: {
     openaiApiKey: params.openaiApiKey,
     anthropicApiKey: params.anthropicApiKey,
     geminiApiKey: params.geminiApiKey,
-    inferenceModel: DEFAULT_CONFIG.inferenceModel || "gpt-5.2",
+    inferenceModel: params.geminiApiKey ? "gemini-3-flash-preview" : (DEFAULT_CONFIG.inferenceModel || "gpt-5.2"),
     maxTokensPerTurn: DEFAULT_CONFIG.maxTokensPerTurn || 4096,
     heartbeatConfigPath:
       DEFAULT_CONFIG.heartbeatConfigPath || "~/.automaton/heartbeat.yml",
