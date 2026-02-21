@@ -65,6 +65,9 @@ export function loadConfig(): AutomatonConfig | null {
       ...DEFAULT_CONFIG,
       ...raw,
       conwayApiKey: apiKey,
+      openaiApiKey: raw.openaiApiKey,
+      anthropicApiKey: raw.anthropicApiKey,
+      geminiApiKey: raw.geminiApiKey,
       treasuryPolicy,
       modelStrategy,
       soulConfig,
@@ -120,6 +123,7 @@ export function createConfig(params: {
   apiKey: string;
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  geminiApiKey?: string;
   parentAddress?: Address;
   treasuryPolicy?: TreasuryPolicy;
 }): AutomatonConfig {
@@ -135,6 +139,7 @@ export function createConfig(params: {
     conwayApiKey: params.apiKey,
     openaiApiKey: params.openaiApiKey,
     anthropicApiKey: params.anthropicApiKey,
+    geminiApiKey: params.geminiApiKey,
     inferenceModel: DEFAULT_CONFIG.inferenceModel || "gpt-5.2",
     maxTokensPerTurn: DEFAULT_CONFIG.maxTokensPerTurn || 4096,
     heartbeatConfigPath:

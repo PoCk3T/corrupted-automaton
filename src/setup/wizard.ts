@@ -91,10 +91,16 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
     console.log(chalk.yellow("  Warning: Anthropic keys usually start with sk-ant-. Saving anyway."));
   }
 
-  if (openaiApiKey || anthropicApiKey) {
+  const geminiApiKey = await promptOptional("Gemini API key (AIza..., optional)");
+  if (geminiApiKey && !geminiApiKey.startsWith("AIza")) {
+    console.log(chalk.yellow("  Warning: Gemini keys usually start with AIza. Saving anyway."));
+  }
+
+  if (openaiApiKey || anthropicApiKey || geminiApiKey) {
     const providers = [
       openaiApiKey ? "OpenAI" : null,
       anthropicApiKey ? "Anthropic" : null,
+      geminiApiKey ? "Gemini" : null,
     ].filter(Boolean).join(", ");
     console.log(chalk.green(`  Provider keys saved: ${providers}\n`));
   } else {
@@ -149,6 +155,7 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
     apiKey,
     openaiApiKey: openaiApiKey || undefined,
     anthropicApiKey: anthropicApiKey || undefined,
+    geminiApiKey: geminiApiKey || undefined,
     treasuryPolicy,
   });
 

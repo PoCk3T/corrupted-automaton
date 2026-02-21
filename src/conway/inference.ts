@@ -26,14 +26,15 @@ interface InferenceClientOptions {
   lowComputeModel?: string;
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  geminiApiKey?: string;
 }
 
-type InferenceBackend = "conway" | "openai" | "anthropic";
+type InferenceBackend = "conway" | "openai" | "anthropic" | "gemini";
 
 export function createInferenceClient(
   options: InferenceClientOptions,
 ): InferenceClient {
-  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey } = options;
+  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, geminiApiKey } = options;
   const httpClient = new ResilientHttpClient({
     baseTimeout: INFERENCE_TIMEOUT_MS,
     retryableStatuses: [429, 500, 502, 503, 504],
@@ -76,6 +77,7 @@ export function createInferenceClient(
     const backend = resolveInferenceBackend(model, {
       openaiApiKey,
       anthropicApiKey,
+      geminiApiKey,
     });
 
     if (backend === "anthropic") {
@@ -86,6 +88,18 @@ export function createInferenceClient(
         tools,
         temperature: opts?.temperature,
         anthropicApiKey: anthropicApiKey as string,
+        httpClient,
+      });
+    }
+
+    if (backend === "gemini") {
+      return chatViaGemini({
+        model,
+        tokenLimit,
+        messages,
+        tools,
+        temperature: opts?.temperature,
+        geminiApiKey: geminiApiKey as string,
         httpClient,
       });
     }
@@ -155,11 +169,16 @@ function resolveInferenceBackend(
   keys: {
     openaiApiKey?: string;
     anthropicApiKey?: string;
+    geminiApiKey?: string;
   },
 ): InferenceBackend {
   // Anthropic models: claude-*
   if (keys.anthropicApiKey && /^claude/i.test(model)) {
     return "anthropic";
+  }
+  // Gemini models: gemini-*
+  if (keys.geminiApiKey && /^gemini/i.test(model)) {
+    return "gemini";
   }
   // OpenAI models: gpt-*, o[1-9]*, chatgpt-*
   if (keys.openaiApiKey && /^(gpt|o[1-9]|chatgpt)/i.test(model)) {
@@ -232,6 +251,124 @@ async function chatViaOpenAiCompatible(params: {
     toolCalls,
     usage,
     finishReason: choice.finish_reason || "stop",
+  };
+}
+
+async function chatViaGemini(params: {
+  model: string;
+  tokenLimit: number;
+  messages: ChatMessage[];
+  tools?: InferenceToolDefinition[];
+  temperature?: number;
+  geminiApiKey: string;
+  httpClient: ResilientHttpClient;
+}): Promise<InferenceResponse> {
+  // Transform messages to Gemini format: { contents: [{ role: "user" | "model", parts: [{ text: "..." }] }] }
+  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+  let systemInstruction: { parts: Array<{ text: string }> } | undefined;
+
+  for (const msg of params.messages) {
+    if (msg.role === "system") {
+      systemInstruction = { parts: [{ text: msg.content }] };
+      continue;
+    }
+
+    // Gemini uses "model" instead of "assistant"
+    const role = msg.role === "assistant" ? "model" : "user";
+    
+    // Merge consecutive same-role messages for Gemini
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) {
+      last.parts[0].text += "\n" + msg.content;
+    } else {
+      contents.push({
+        role,
+        parts: [{ text: msg.content }],
+      });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: params.tokenLimit,
+      temperature: params.temperature ?? 0.7,
+    },
+  };
+
+  if (systemInstruction) {
+    body.systemInstruction = systemInstruction;
+  }
+
+  // Handle tools for Gemini if needed (simplified for now as per blueprint)
+  if (params.tools && params.tools.length > 0) {
+    body.tools = [{
+      functionDeclarations: params.tools.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      })),
+    }];
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent`;
+  const resp = await params.httpClient.request(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": params.geminiApiKey,
+    },
+    body: JSON.stringify(body),
+    timeout: INFERENCE_TIMEOUT_MS,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Inference error (gemini): ${resp.status}: ${text}`);
+  }
+
+  const data = await resp.json() as any;
+  const candidate = data.candidates?.[0];
+
+  if (!candidate) {
+    throw new Error("No candidates returned from gemini inference");
+  }
+
+  const textContent = candidate.content?.parts
+    ?.filter((p: any) => p.text)
+    .map((p: any) => p.text)
+    .join("\n") || "";
+
+  const toolCalls: InferenceToolCall[] | undefined = candidate.content?.parts
+    ?.filter((p: any) => p.functionCall)
+    .map((p: any) => ({
+      id: `call_${Math.random().toString(36).slice(2, 11)}`,
+      type: "function" as const,
+      function: {
+        name: p.functionCall.name,
+        arguments: JSON.stringify(p.functionCall.args || {}),
+      },
+    }));
+
+  const promptTokens = data.usageMetadata?.promptTokenCount || 0;
+  const completionTokens = data.usageMetadata?.candidatesTokenCount || 0;
+  const usage: TokenUsage = {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+  };
+
+  return {
+    id: `gemini-${Math.random().toString(36).slice(2, 11)}`,
+    model: params.model,
+    message: {
+      role: "assistant",
+      content: textContent,
+      tool_calls: toolCalls,
+    },
+    toolCalls,
+    usage,
+    finishReason: candidate.finishReason?.toLowerCase() || "stop",
   };
 }
 
